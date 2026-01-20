@@ -1,0 +1,12 @@
+#!/bin/bash
+# Post-installation script for THE DOWNLOADER
+
+APP_PATH="/Applications/TheDownloader.app"
+
+# Add to Login Items using osascript
+osascript -e "tell application \"System Events\" to make login item at end with properties {path:\"$APP_PATH\", hidden:false}" 2>/dev/null || true
+
+# Launch the app
+open "$APP_PATH"
+
+exit 0

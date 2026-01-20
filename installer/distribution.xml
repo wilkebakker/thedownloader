@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>THE DOWNLOADER</title>
+    <organization>com.wilkebakker</organization>
+    <domains enable_localSystem="true"/>
+    <options customize="never" require-scripts="true" rootVolumeOnly="true"/>
+
+    <!-- Welcome screen -->
+    <welcome file="welcome.html" mime-type="text/html"/>
+
+    <!-- License agreement -->
+    <license file="LICENSE.txt" mime-type="text/plain"/>
+
+    <!-- Conclusion -->
+    <conclusion file="conclusion.html" mime-type="text/html"/>
+
+    <!-- Installation choices -->
+    <choices-outline>
+        <line choice="default">
+            <line choice="com.wilkebakker.thedownloader"/>
+        </line>
+    </choices-outline>
+
+    <choice id="default"/>
+
+    <choice id="com.wilkebakker.thedownloader" visible="false">
+        <pkg-ref id="com.wilkebakker.thedownloader"/>
+    </choice>
+
+    <pkg-ref id="com.wilkebakker.thedownloader" version="1.0" onConclusion="none">TheDownloader.pkg</pkg-ref>
+</installer-gui-script>

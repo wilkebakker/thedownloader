@@ -1,0 +1,30 @@
+THE DOWNLOADER - License Agreement
+
+Copyright (c) 2024 Wilke Bakker. All rights reserved.
+
+BY USING THIS SOFTWARE, YOU AGREE TO THE FOLLOWING TERMS:
+
+1. PERMITTED USE
+This software is provided for downloading content you have legal rights to access, including:
+- Your own uploads and content
+- Content licensed under Creative Commons or similar licenses
+- Content you have explicit permission to download
+
+2. PROHIBITED USE
+You may NOT use this software to:
+- Download copyrighted material without authorization
+- Circumvent digital rights management (DRM)
+- Violate any applicable laws or platform terms of service
+
+3. DISCLAIMER
+This software is provided "as is" without warranty of any kind. The developer is not responsible for any misuse of this software or any legal consequences resulting from such misuse.
+
+4. USER RESPONSIBILITY
+You are solely responsible for ensuring that your use of this software complies with all applicable laws and regulations in your jurisdiction.
+
+5. THIRD-PARTY COMPONENTS
+This software uses the following open-source components:
+- yt-dlp (Unlicense)
+- ffmpeg (LGPL/GPL)
+
+By clicking "Agree" or installing this software, you acknowledge that you have read, understood, and agree to be bound by these terms.
