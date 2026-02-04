@@ -25,7 +25,7 @@ https://tools4creatives.com/updates/thedownloader/appcast.xml
 
 ### Public Key (in Info.plist)
 ```
-mKX9fyBYSBlulbBF6DU9mJPN2fGikU8PK6Nq9Uzu2go=
+0CTbhbvjwE0o3pYEOGFPehi3zP77fLOAyF6kEaAc0po=
 ```
 
 ### Private Key
