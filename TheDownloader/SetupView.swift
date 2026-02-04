@@ -48,7 +48,6 @@ struct SetupView: View {
     @State private var quickActionsInstalled = false
     @State private var quickActionsStatus = ""
     @State private var isWorking = false
-    @State private var autoUpdate = true
 
     private let currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
 
@@ -106,6 +105,31 @@ struct SetupView: View {
                     .controlSize(.small)
                     Spacer()
                 }
+            }
+            .padding(14)
+            .background(Color(NSColor.controlBackgroundColor))
+            .cornerRadius(8)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+            )
+
+            // TikTok Card
+            HStack(spacing: 12) {
+                Image(systemName: "play.rectangle.fill")
+                    .font(.system(size: 20))
+                    .foregroundColor(.accentColor)
+                    .frame(width: 32)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("TikTok")
+                        .font(.system(size: 12, weight: .medium))
+                    Text("Downloads work without Safari cookies")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer()
             }
             .padding(14)
             .background(Color(NSColor.controlBackgroundColor))

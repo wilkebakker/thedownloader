@@ -1,5 +1,5 @@
 // THE DOWNLOADER — Unified Media Downloader & Converter
-// Menu bar app for downloading from YouTube, TikTok, Instagram
+// Menu bar app for downloading from YouTube and TikTok
 // and converting media files via drag & drop on the menu bar icon
 // Dependencies: brew install yt-dlp ffmpeg
 

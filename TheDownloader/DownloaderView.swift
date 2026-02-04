@@ -13,11 +13,10 @@ struct DownloaderView: View {
     @State private var currentItem: Int = 0
     @State private var totalItems: Int = 0
     @State private var statusMessage: String = ""
-    @State private var showError: Bool = false
-    @State private var errorMessage: String = ""
     @State private var downloadFullPlaylist: Bool = false
     @State private var downloadTask: Task<Void, Never>?
     @State private var processController: ProcessController?
+    @State private var lastDownloadSucceeded = false
 
     var hasPlaylistURL: Bool {
         let text = linksText.lowercased()
@@ -147,26 +146,20 @@ struct DownloaderView: View {
                 }
             }
 
-            // Error
-            if showError {
-                HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 11))
-                        .foregroundColor(.orange)
-                    Text(errorMessage)
-                        .font(.system(size: 11))
-                        .lineLimit(2)
-                    Spacer()
-                    Button { showError = false } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
+            // Show in Finder (after successful download)
+            if !isDownloading && lastDownloadSucceeded {
+                Button {
+                    showDownloadFolderInFinder()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "folder.badge.plus")
+                            .font(.system(size: 12))
+                        Text("Show in Finder")
+                            .font(.system(size: 11, weight: .medium))
                     }
-                    .buttonStyle(.borderless)
+                    .foregroundColor(.accentColor)
                 }
-                .padding(10)
-                .background(Color.orange.opacity(0.1))
-                .cornerRadius(8)
+                .buttonStyle(.plain)
             }
 
             Spacer(minLength: 0)
@@ -215,6 +208,7 @@ struct DownloaderView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!canDownload)
+                .keyboardShortcut(.return, modifiers: .command)
             }
         }
         .padding(16)
@@ -313,21 +307,15 @@ struct DownloaderView: View {
             .filter { !$0.isEmpty }
 
         let links = rawLines.compactMap { normalizeURL($0) }
-        guard !links.isEmpty else {
-            showError = true
-            errorMessage = "No valid URLs found"
-            return
-        }
+        guard !links.isEmpty else { return }
 
         do {
             try FileManager.default.createDirectory(atPath: destPath, withIntermediateDirectories: true)
         } catch {
-            showError = true
-            errorMessage = "Cannot access destination folder"
             return
         }
 
-        showError = false
+        lastDownloadSucceeded = false
         isDownloading = true
         totalItems = links.count
         currentItem = 0
@@ -337,14 +325,13 @@ struct DownloaderView: View {
         let targetPath = destPath
         let format = outputFormat
         let includePlaylist = downloadFullPlaylist
-
-        // Create process controller for cancellation
         let controller = ProcessController()
         processController = controller
 
+        var anyFailed = false
+
         downloadTask = Task {
             for (index, link) in links.enumerated() {
-                // Check for cancellation
                 if Task.isCancelled { break }
 
                 await MainActor.run {
@@ -360,20 +347,15 @@ struct DownloaderView: View {
                     controller: controller
                 ) { prog in
                     Task { @MainActor in
-                        // For playlists, show video X of Y
                         if prog.totalVideos > 1 {
                             totalItems = prog.totalVideos
                             currentItem = prog.currentVideo
-                            // Overall progress = (completed videos + current video progress) / total
                             let completedProgress = Double(prog.currentVideo - 1) / Double(prog.totalVideos)
                             let currentProgress = (prog.downloadPercent / 100.0) / Double(prog.totalVideos)
                             progress = completedProgress + currentProgress
                         } else {
-                            // Single video - just show download percent
                             progress = prog.downloadPercent / 100.0
                         }
-
-                        // Update status message
                         if !prog.videoTitle.isEmpty {
                             let shortTitle = prog.videoTitle.count > 30
                                 ? String(prog.videoTitle.prefix(27)) + "..."
@@ -386,21 +368,21 @@ struct DownloaderView: View {
                 }
 
                 if status != 0 && !Task.isCancelled {
-                    // Note error but continue with next link
+                    anyFailed = true
                 }
             }
 
             await MainActor.run {
-                // Only show complete if not cancelled
                 if !Task.isCancelled {
                     isDownloading = false
                     progress = 1.0
-                    statusMessage = "Complete!"
+                    statusMessage = anyFailed ? "Some failed" : "Complete!"
                     downloadTask = nil
+                    lastDownloadSucceeded = !anyFailed
 
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                         if !isDownloading {
-                            linksText = ""
+                            if !anyFailed { linksText = "" }
                             statusMessage = ""
                             downloadFullPlaylist = false
                         }
@@ -408,6 +390,10 @@ struct DownloaderView: View {
                 }
             }
         }
+    }
+
+    func showDownloadFolderInFinder() {
+        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: destPath)
     }
 }
 
@@ -496,6 +482,29 @@ enum OutputFormat: CaseIterable {
     }
 }
 
+// MARK: - Video Platform Detection
+
+enum VideoPlatform {
+    case youtube
+    case tiktok
+    case instagram
+    case unknown
+}
+
+func detectPlatform(url: String) -> VideoPlatform {
+    let lower = url.lowercased()
+    if lower.contains("youtube.com") || lower.contains("youtu.be") {
+        return .youtube
+    }
+    if lower.contains("tiktok.com") || lower.contains("vm.tiktok.com") || lower.contains("vt.tiktok.com") {
+        return .tiktok
+    }
+    if lower.contains("instagram.com") || lower.contains("instagr.am") {
+        return .instagram
+    }
+    return .unknown
+}
+
 // MARK: - Helpers
 
 func defaultDestination() -> String {
@@ -516,7 +525,7 @@ func extractURLs(from text: String) -> [String] {
         )
     }
 
-    let pattern = #"(?i)\b(?:https?://)?(?:(?:www\.)?(?:youtube\.com|youtu\.be|tiktok\.com|instagram\.com|vm\.tiktok\.com)\S+)"#
+    let pattern = #"(?i)\b(?:https?://)?(?:(?:www\.)?(?:youtube\.com|youtu\.be|tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com|instagram\.com|instagr\.am)\S+)"#
     guard let rx = try? NSRegularExpression(pattern: pattern) else { return [] }
     let ns = processed as NSString
     let matches = rx.matches(in: processed, range: NSRange(location: 0, length: ns.length))
@@ -569,40 +578,58 @@ func runYtDlpWithProgress(
         return 1
     }
 
+    let platform = detectPlatform(url: url)
+
+    let outputTemplate: String
+    switch platform {
+    case .tiktok, .instagram:
+        outputTemplate = "%(uploader)s_%(id)s.%(ext)s"
+    case .youtube, .unknown:
+        outputTemplate = "%(title)s.%(ext)s"
+    }
+
+    let outDir = (dest as NSString).standardizingPath
+    let outTemplate = (outDir as NSString).appendingPathComponent(outputTemplate)
     var args: [String] = [
         ytdlp,
         "--restrict-filenames",
         "--newline",
         "--progress",
-        "--output", "%(title)s.%(ext)s",
-        "--paths", "home:\(dest)"
+        "--output", outTemplate
     ]
 
-    // Only download single video unless user explicitly wants full playlist
     if !fullPlaylist {
         args.append("--no-playlist")
     }
+
+    // Don't use Safari cookies for TikTok — yt-dlp works better without them.
 
     if let ff = which("ffmpeg") {
         args += ["--ffmpeg-location", ff]
     }
 
-    switch format {
-    case .videoMP4:
-        args += ["-f", "bv*+ba/best", "--merge-output-format", "mp4",
-                 "--postprocessor-args", "ffmpeg:-c:v libx264 -preset medium -crf 18 -c:a aac -b:a 192k -pix_fmt yuv420p -movflags +faststart"]
-    case .videoH265:
-        args += ["-f", "bv*+ba/best", "--merge-output-format", "mp4",
-                 "--postprocessor-args", "ffmpeg:-c:v libx265 -preset medium -crf 22 -c:a aac -b:a 192k -tag:v hvc1 -movflags +faststart"]
-    case .videoMOV:
-        args += ["-f", "bv*+ba/best", "--merge-output-format", "mov",
-                 "--postprocessor-args", "ffmpeg:-c:v libx264 -preset medium -crf 18 -c:a aac -b:a 192k -pix_fmt yuv420p"]
-    case .audioWAV24:
-        args += ["-f", "ba/best", "--extract-audio", "--audio-format", "wav",
-                 "--postprocessor-args", "ffmpeg:-ar 48000 -ac 2 -c:a pcm_s24le"]
-    case .audioMP3:
-        args += ["-f", "ba/best", "--extract-audio", "--audio-format", "mp3",
-                 "--audio-quality", "0"]
+    let isInstagramVideo = platform == .instagram && (format == .videoMP4 || format == .videoH265 || format == .videoMOV)
+    if isInstagramVideo {
+        // Instagram: separate video + audio (two files), no merge.
+        args += ["-f", "bv*,ba"]
+    } else {
+        switch format {
+        case .videoMP4:
+            args += ["-f", "bv*+ba/best", "--merge-output-format", "mp4",
+                     "--postprocessor-args", "ffmpeg:-c:v libx264 -preset medium -crf 18 -c:a aac -b:a 192k -pix_fmt yuv420p -movflags +faststart"]
+        case .videoH265:
+            args += ["-f", "bv*+ba/best", "--merge-output-format", "mp4",
+                     "--postprocessor-args", "ffmpeg:-c:v libx265 -preset medium -crf 22 -c:a aac -b:a 192k -tag:v hvc1 -movflags +faststart"]
+        case .videoMOV:
+            args += ["-f", "bv*+ba/best", "--merge-output-format", "mov",
+                     "--postprocessor-args", "ffmpeg:-c:v libx264 -preset medium -crf 18 -c:a aac -b:a 192k -pix_fmt yuv420p"]
+        case .audioWAV24:
+            args += ["-f", "ba/best", "--extract-audio", "--audio-format", "wav",
+                     "--postprocessor-args", "ffmpeg:-ar 48000 -ac 2 -c:a pcm_s24le"]
+        case .audioMP3:
+            args += ["-f", "ba/best", "--extract-audio", "--audio-format", "mp3",
+                     "--audio-quality", "0"]
+        }
     }
 
     args.append(url)
@@ -639,7 +666,6 @@ func runYtDlpWithProgress(
         if output.contains("[download] Destination:") {
             if let start = output.range(of: "Destination: ")?.upperBound {
                 let title = String(output[start...]).trimmingCharacters(in: .whitespacesAndNewlines)
-                // Get just the filename without path
                 let filename = (title as NSString).lastPathComponent
                 progress.videoTitle = filename
                 onProgress(progress)
