@@ -4,6 +4,26 @@ import SwiftUI
 import AppKit
 import Sparkle
 
+// MARK: - Cookie Browser (for Instagram auth)
+
+/// Which browser yt-dlp pulls login cookies from. Instagram needs a logged-in
+/// session; the raw values are exactly the names yt-dlp's --cookies-from-browser
+/// expects. `none` disables cookie use entirely.
+enum CookieBrowser: String, CaseIterable, Identifiable {
+    case none, safari, chrome, firefox, brave, edge
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .none: return "None"
+        case .safari: return "Safari"
+        case .chrome: return "Chrome"
+        case .firefox: return "Firefox"
+        case .brave: return "Brave"
+        case .edge: return "Edge"
+        }
+    }
+}
+
 // MARK: - Sparkle Updater Controller
 
 final class UpdaterViewModel: ObservableObject {
@@ -48,6 +68,7 @@ struct SetupView: View {
     @State private var quickActionsInstalled = false
     @State private var quickActionsStatus = ""
     @State private var isWorking = false
+    @AppStorage("cookieBrowser") private var cookieBrowser: String = CookieBrowser.safari.rawValue
 
     private let currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
 
@@ -122,14 +143,72 @@ struct SetupView: View {
                     .frame(width: 32)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("TikTok")
+                    Text("TikTok & YouTube")
                         .font(.system(size: 12, weight: .medium))
-                    Text("Downloads work without Safari cookies")
+                    Text("Work out of the box — no login needed")
                         .font(.system(size: 10))
                         .foregroundColor(.secondary)
                 }
 
                 Spacer()
+            }
+            .padding(14)
+            .background(Color(NSColor.controlBackgroundColor))
+            .cornerRadius(8)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+            )
+
+            // Instagram Card — needs cookies from a logged-in browser
+            VStack(spacing: 10) {
+                HStack(spacing: 12) {
+                    Image(systemName: "camera.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundColor(.accentColor)
+                        .frame(width: 32)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Instagram Login")
+                            .font(.system(size: 12, weight: .medium))
+                        Text("Reels & Stories need a logged-in browser")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    }
+
+                    Spacer()
+
+                    Picker("", selection: $cookieBrowser) {
+                        ForEach(CookieBrowser.allCases) { browser in
+                            Text(browser.label).tag(browser.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .frame(width: 100)
+                }
+
+                // Safari cookies live in a protected folder → the app needs Full
+                // Disk Access. This button registers the app in that list and opens
+                // it, so the user only has to flip the switch.
+                if cookieBrowser == CookieBrowser.safari.rawValue {
+                    Button {
+                        grantSafariAccess()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "lock.open.fill")
+                                .font(.system(size: 10))
+                            Text("Enable Full Disk Access (then toggle TheDownloader on)")
+                                .font(.system(size: 10, weight: .medium))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 5)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
             }
             .padding(14)
             .background(Color(NSColor.controlBackgroundColor))
@@ -214,6 +293,19 @@ struct SetupView: View {
         .padding(16)
         .onAppear {
             checkInstallStatus()
+        }
+    }
+
+    // MARK: - Full Disk Access (for Safari cookies)
+
+    /// Make the app appear in the Full Disk Access list so the user only flips a
+    /// toggle — no hunting with the "+" button. macOS adds an app to that list the
+    /// moment it tries to read an FDA-protected path, so we touch Safari's cookie
+    /// store (the exact thing yt-dlp needs) and then open the settings pane.
+    func grantSafariAccess() {
+        touchFullDiskAccessProtectedPaths()
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+            NSWorkspace.shared.open(url)
         }
     }
 

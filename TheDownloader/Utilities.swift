@@ -267,6 +267,45 @@ enum FileCategory {
     case unknown
 }
 
+/// Attempt to read Full-Disk-Access-protected paths (Safari's cookie store etc.).
+/// The reads fail silently without permission, but the attempt makes macOS list
+/// this app in the Full Disk Access pane (toggled off) — so the user just flips
+/// the switch instead of hunting for the app with the "+" button. Needed because
+/// Instagram downloads pull cookies from Safari, which lives in a protected folder.
+func touchFullDiskAccessProtectedPaths() {
+    let home = FileManager.default.homeDirectoryForCurrentUser
+    let protectedPaths = [
+        "Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies",
+        "Library/Cookies/Cookies.binarycookies",
+        "Library/Safari/Bookmarks.plist"
+    ]
+    for rel in protectedPaths {
+        _ = try? Data(contentsOf: home.appendingPathComponent(rel))
+    }
+}
+
+/// Probe whether a file actually contains video and/or audio streams via ffprobe.
+/// Falls back to extension-based guessing if ffprobe is unavailable or returns
+/// nothing. Images report as video-only (ffprobe sees an image as a video stream),
+/// which is what we want — they can become a frame/image, never audio.
+func mediaCapabilities(_ url: URL) -> (hasVideo: Bool, hasAudio: Bool) {
+    if let ffprobe = which("ffprobe"),
+       let out = try? runProcessSync(cmd: ffprobe, args: [
+           "-v", "error", "-show_entries", "stream=codec_type", "-of", "csv=p=0", url.path
+       ]) {
+        let v = out.contains("video")
+        let a = out.contains("audio")
+        if v || a { return (v, a) }
+    }
+    // Fallback: guess from extension
+    switch categorizeFile(url) {
+    case .video: return (true, true)
+    case .audio: return (false, true)
+    case .image: return (true, false)
+    case .unknown: return (true, true)
+    }
+}
+
 func categorizeFile(_ url: URL) -> FileCategory {
     let ext = url.pathExtension.lowercased()
 

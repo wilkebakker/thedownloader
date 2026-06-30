@@ -97,29 +97,31 @@ curl -L -o "$BUNDLE_DIR/yt-dlp" "$YT_DLP_URL" 2>/dev/null
 chmod +x "$BUNDLE_DIR/yt-dlp"
 echo -e "  ${GREEN}✓${NC} yt-dlp downloaded"
 
-# Download ffmpeg
-echo -e "  ${BLUE}→${NC} Downloading ffmpeg..."
-curl -L -o "$BUILD_DIR/ffmpeg.zip" "https://evermeet.cx/ffmpeg/getrelease/zip" 2>/dev/null
+# Download ffmpeg + ffprobe as UNIVERSAL2 (arm64 + x86_64).
+# evermeet.cx ships x86_64-only, which triggers macOS's "Intel-based app,
+# support ending" warning and breaks once Rosetta is gone. martin-riedl.de
+# publishes static builds for BOTH arches at the same version; we lipo them
+# into one universal binary so the app runs natively on Apple Silicon and
+# still works on Intel. yt-dlp_macos (above) is already universal2.
 cd "$BUILD_DIR"
-unzip -q ffmpeg.zip -d ffmpeg_extract 2>/dev/null || true
-FFMPEG_BIN=$(find ffmpeg_extract -name "ffmpeg" -type f 2>/dev/null | head -1)
-if [[ -n "$FFMPEG_BIN" ]]; then
-    cp "$FFMPEG_BIN" "$BUNDLE_DIR/ffmpeg"
-    chmod +x "$BUNDLE_DIR/ffmpeg"
-    echo -e "  ${GREEN}✓${NC} ffmpeg downloaded"
-fi
-
-# Download ffprobe
-curl -L -o "$BUILD_DIR/ffprobe.zip" "https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip" 2>/dev/null || true
-if [[ -f "$BUILD_DIR/ffprobe.zip" ]]; then
-    unzip -q "$BUILD_DIR/ffprobe.zip" -d ffprobe_extract 2>/dev/null || true
-    FFPROBE_BIN=$(find ffprobe_extract -name "ffprobe" -type f 2>/dev/null | head -1)
-    if [[ -n "$FFPROBE_BIN" ]]; then
-        cp "$FFPROBE_BIN" "$BUNDLE_DIR/ffprobe"
-        chmod +x "$BUNDLE_DIR/ffprobe"
-        echo -e "  ${GREEN}✓${NC} ffprobe downloaded"
+FFMPEG_BASE="https://ffmpeg.martin-riedl.de/redirect/latest/macos"
+for tool in ffmpeg ffprobe; do
+    echo -e "  ${BLUE}→${NC} Downloading $tool (arm64 + x86_64)..."
+    for slice_arch in arm64 amd64; do
+        curl -fsSL -o "$tool-$slice_arch.zip" "$FFMPEG_BASE/$slice_arch/release/$tool.zip"
+        unzip -o -q "$tool-$slice_arch.zip" -d "$tool-$slice_arch"
+    done
+    arm_bin=$(find "$tool-arm64" -name "$tool" -type f | head -1)
+    x86_bin=$(find "$tool-amd64" -name "$tool" -type f | head -1)
+    lipo -create "$arm_bin" "$x86_bin" -output "$BUNDLE_DIR/$tool"
+    chmod +x "$BUNDLE_DIR/$tool"
+    # Fail loudly if the result isn't actually universal — a silently x86_64-only
+    # binary would reintroduce the Intel warning.
+    if ! lipo -archs "$BUNDLE_DIR/$tool" | grep -q "arm64"; then
+        echo -e "  ${RED}✗ $tool is not universal (missing arm64) — aborting${NC}"; exit 1
     fi
-fi
+    echo -e "  ${GREEN}✓${NC} $tool universal: $(lipo -archs "$BUNDLE_DIR/$tool")"
+done
 
 # Strip extended attributes from all binaries
 xattr -cr "$BUNDLE_DIR"
@@ -132,18 +134,37 @@ echo -e "${YELLOW}[3/7]${NC} Signing binaries and app..."
 # Remove ALL extended attributes recursively from app bundle
 find "$APP_PATH" -exec xattr -c {} \; 2>/dev/null || true
 
-# Sign each bundled binary with hardened runtime and timestamp
+# Entitlements files
+APP_ENTITLEMENTS="$SCRIPT_DIR/TheDownloader/TheDownloader.entitlements"
+BIN_ENTITLEMENTS="$INSTALLER_DIR/bundled-bin.entitlements"
+
+# Sign the app itself FIRST (--deep covers Sparkle.framework + nested code).
+# Pass --entitlements so the app keeps its file-access entitlements; without it
+# a --force re-sign strips everything Xcode applied during archive.
+codesign --force --deep --options runtime --timestamp \
+    --entitlements "$APP_ENTITLEMENTS" \
+    --sign "$APP_SIGN_IDENTITY" \
+    "$APP_PATH"
+
+# Re-sign each bundled binary AFTER the deep sign (the --deep pass above clobbers
+# them with the app's entitlements). yt-dlp/ffmpeg/ffprobe need
+# disable-library-validation so yt-dlp can load its extracted Python.framework.
 for binary in "$BUNDLE_DIR"/*; do
     if [[ -f "$binary" && -x "$binary" ]]; then
         echo -e "  ${BLUE}→${NC} Signing $(basename "$binary")..."
         codesign --force --options runtime --timestamp \
+            --entitlements "$BIN_ENTITLEMENTS" \
             --sign "$APP_SIGN_IDENTITY" \
             "$binary"
     fi
 done
 
-# Sign the app itself
-codesign --force --deep --options runtime --timestamp \
+# Re-seal the app container (NO --deep) so its CodeResources reflect the
+# re-signed binaries above; without this the app seal is obsolete and
+# notarization/Gatekeeper rejects it. --deep is omitted on purpose so the
+# already-valid nested signatures (Sparkle, bins) are preserved, not overwritten.
+codesign --force --options runtime --timestamp \
+    --entitlements "$APP_ENTITLEMENTS" \
     --sign "$APP_SIGN_IDENTITY" \
     "$APP_PATH"
 echo -e "  ${GREEN}✓${NC} All binaries and app signed"

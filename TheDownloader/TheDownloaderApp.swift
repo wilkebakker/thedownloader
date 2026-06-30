@@ -128,6 +128,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var popover: NSPopover!
     var dropZoneWindow: NSWindow?
     var eventMonitor: Any?
+    var autoCloseTimer: Timer?
+
+    /// How long the app may stay inactive with the popover open before it
+    /// auto-closes. Generous so quick app switches never dismiss it.
+    private let inactivityAutoCloseDelay: TimeInterval = 60
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Listen for close popover notifications
@@ -153,16 +158,39 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Create popover
         popover = NSPopover()
         popover.contentSize = NSSize(width: 380, height: 540)
-        popover.behavior = .transient
+        // .applicationDefined: the popover does NOT auto-close when you click
+        // outside or switch apps (the old .transient behavior was the annoyance).
+        // It closes only via the menu-bar icon, Escape, or the inactivity timer below.
+        popover.behavior = .applicationDefined
         popover.animates = true
         popover.contentViewController = NSHostingController(rootView: MainView())
 
         // Setup drag & drop view covering the status item
         setupDragDropView()
 
+        // Auto-close the popover only after the app has been inactive for a while,
+        // so brief detours (copying a link, dragging a file) don't dismiss it.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(appDidResignActive),
+            name: NSApplication.didResignActiveNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(appDidBecomeActive),
+            name: NSApplication.didBecomeActiveNotification, object: nil)
+
         // Check dependencies
         if !UserDefaults.standard.bool(forKey: "dependenciesChecked") {
             checkDependencies()
+        }
+
+        // Register once for Full Disk Access so the app shows up in that list by
+        // itself (toggled off) — the user only flips the switch when they want
+        // Instagram. Touching the protected paths off the main thread avoids any
+        // launch hitch if the reads block.
+        if !UserDefaults.standard.bool(forKey: "fdaRegistered") {
+            UserDefaults.standard.set(true, forKey: "fdaRegistered")
+            DispatchQueue.global(qos: .utility).async {
+                touchFullDiskAccessProtectedPaths()
+            }
         }
     }
 
@@ -184,11 +212,35 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         DropCoordinator.shared.shouldShowDropChoice = true
 
         // Show popover with drop choice
-        if let button = statusItem.button {
-            if !popover.isShown {
-                popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            }
+        if !popover.isShown {
+            showPopover()
         }
+    }
+
+    /// Show the popover and give it keyboard focus. Under .applicationDefined the
+    /// app isn't activated automatically, so text fields (URL paste) wouldn't
+    /// accept input — activate explicitly and make the popover window key.
+    func showPopover() {
+        guard let button = statusItem.button else { return }
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        NSApp.activate(ignoringOtherApps: true)
+        popover.contentViewController?.view.window?.makeKeyAndOrderFront(nil)
+        autoCloseTimer?.invalidate()
+    }
+
+    @objc func appDidResignActive() {
+        // Start the inactivity countdown only while the popover is open.
+        guard popover.isShown else { return }
+        autoCloseTimer?.invalidate()
+        autoCloseTimer = Timer.scheduledTimer(withTimeInterval: inactivityAutoCloseDelay, repeats: false) { [weak self] _ in
+            self?.popover.performClose(nil)
+        }
+    }
+
+    @objc func appDidBecomeActive() {
+        // Back on the app — cancel any pending auto-close.
+        autoCloseTimer?.invalidate()
+        autoCloseTimer = nil
     }
 
     @objc func handleStatusItemClick() {
@@ -220,16 +272,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc func togglePopover() {
-        if let button = statusItem.button {
-            if popover.isShown {
-                popover.performClose(nil)
-            } else {
-                popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            }
+        if popover.isShown {
+            popover.performClose(nil)
+        } else {
+            showPopover()
         }
     }
 
     @objc func closePopover() {
+        autoCloseTimer?.invalidate()
+        autoCloseTimer = nil
         popover.performClose(nil)
     }
 
@@ -379,6 +431,9 @@ struct MainView: View {
             }
         }
         .frame(width: 380, height: 540)
+        .onExitCommand {
+            NotificationCenter.default.post(name: .closePopover, object: nil)
+        }
         .onReceive(dropCoordinator.$shouldShowConverter) { shouldShow in
             if shouldShow {
                 selectedTab = .convert

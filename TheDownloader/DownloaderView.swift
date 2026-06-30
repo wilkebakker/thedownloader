@@ -602,34 +602,40 @@ func runYtDlpWithProgress(
         args.append("--no-playlist")
     }
 
-    // Don't use Safari cookies for TikTok — yt-dlp works better without them.
+    // Instagram requires a logged-in session — without cookies the API returns an
+    // empty media response. The user picks which browser to pull cookies from in
+    // the Setup tab (default Safari). TikTok/YouTube work better WITHOUT cookies,
+    // so this is scoped to Instagram only.
+    if platform == .instagram {
+        let browser = UserDefaults.standard.string(forKey: "cookieBrowser") ?? "safari"
+        if browser != "none" && !browser.isEmpty {
+            args += ["--cookies-from-browser", browser]
+        }
+    }
 
     if let ff = which("ffmpeg") {
         args += ["--ffmpeg-location", ff]
     }
 
-    let isInstagramVideo = platform == .instagram && (format == .videoMP4 || format == .videoH265 || format == .videoMOV)
-    if isInstagramVideo {
-        // Instagram: separate video + audio (two files), no merge.
-        args += ["-f", "bv*,ba"]
-    } else {
-        switch format {
-        case .videoMP4:
-            args += ["-f", "bv*+ba/best", "--merge-output-format", "mp4",
-                     "--postprocessor-args", "ffmpeg:-c:v libx264 -preset medium -crf 18 -c:a aac -b:a 192k -pix_fmt yuv420p -movflags +faststart"]
-        case .videoH265:
-            args += ["-f", "bv*+ba/best", "--merge-output-format", "mp4",
-                     "--postprocessor-args", "ffmpeg:-c:v libx265 -preset medium -crf 22 -c:a aac -b:a 192k -tag:v hvc1 -movflags +faststart"]
-        case .videoMOV:
-            args += ["-f", "bv*+ba/best", "--merge-output-format", "mov",
-                     "--postprocessor-args", "ffmpeg:-c:v libx264 -preset medium -crf 18 -c:a aac -b:a 192k -pix_fmt yuv420p"]
-        case .audioWAV24:
-            args += ["-f", "ba/best", "--extract-audio", "--audio-format", "wav",
-                     "--postprocessor-args", "ffmpeg:-ar 48000 -ac 2 -c:a pcm_s24le"]
-        case .audioMP3:
-            args += ["-f", "ba/best", "--extract-audio", "--audio-format", "mp3",
-                     "--audio-quality", "0"]
-        }
+    // All platforms (incl. Instagram) merge video+audio into one file. The old
+    // Instagram special-case used "-f bv*,ba" which produced a silent video plus
+    // a separate .m4a — a broken "download" with no sound.
+    switch format {
+    case .videoMP4:
+        args += ["-f", "bv*+ba/best", "--merge-output-format", "mp4",
+                 "--postprocessor-args", "ffmpeg:-c:v libx264 -preset medium -crf 18 -c:a aac -b:a 192k -pix_fmt yuv420p -movflags +faststart"]
+    case .videoH265:
+        args += ["-f", "bv*+ba/best", "--merge-output-format", "mp4",
+                 "--postprocessor-args", "ffmpeg:-c:v libx265 -preset medium -crf 22 -c:a aac -b:a 192k -tag:v hvc1 -movflags +faststart"]
+    case .videoMOV:
+        args += ["-f", "bv*+ba/best", "--merge-output-format", "mov",
+                 "--postprocessor-args", "ffmpeg:-c:v libx264 -preset medium -crf 18 -c:a aac -b:a 192k -pix_fmt yuv420p"]
+    case .audioWAV24:
+        args += ["-f", "ba/best", "--extract-audio", "--audio-format", "wav",
+                 "--postprocessor-args", "ffmpeg:-ar 48000 -ac 2 -c:a pcm_s24le"]
+    case .audioMP3:
+        args += ["-f", "ba/best", "--extract-audio", "--audio-format", "mp3",
+                 "--audio-quality", "0"]
     }
 
     args.append(url)

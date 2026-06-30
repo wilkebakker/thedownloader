@@ -7,7 +7,10 @@ import UniformTypeIdentifiers
 struct ConverterView: View {
     @StateObject private var dropCoordinator = DropCoordinator.shared
     @State private var droppedFiles: [URL] = []
-    @State private var selectedFormats: Set<ConvertFormat> = [.wav24]
+    // Empty by default so the first drop auto-picks a sensible format per file type
+    // (video→MP4, audio→WAV, image→WebP). A non-empty default would wrongly stick
+    // e.g. a dropped video to WAV.
+    @State private var selectedFormats: Set<ConvertFormat> = []
     @State private var proresProfile: ProResProfile = .hq
     @State private var rescaleOption: RescaleOption = .none
     @State private var isConverting: Bool = false
@@ -142,6 +145,11 @@ struct ConverterView: View {
                 autoSelectFormats()
             }
         }
+        // Also auto-pick a default when files arrive via direct drop or the file
+        // picker (those bypass the dropCoordinator path above).
+        .onChange(of: droppedFiles) { _ in
+            autoSelectFormats()
+        }
     }
 
     // MARK: - Computed Properties
@@ -196,45 +204,84 @@ struct ConverterView: View {
         let scale = rescaleOption
         let shouldAddToProject = dropCoordinator.dropAction == .convertAndAdd
 
-        let total = files.count * formats.count
-        var outputFiles: [URL] = []
-
         Task.detached {
-            for (fileIndex, file) in files.enumerated() {
-                for (formatIndex, format) in formats.enumerated() {
-                    let completed = fileIndex * formats.count + formatIndex + 1
-                    await MainActor.run {
-                        currentItem = completed
-                        progress = Double(completed - 1) / Double(total)
-                        statusMessage = "\(file.lastPathComponent) → \(format.label)"
-                    }
-
-                    let outputDir = file.deletingLastPathComponent().path
-                    let result = await convertFile(file, to: format, proresProfile: profile, rescale: scale, outputDir: outputDir)
-
-                    if result.status == 0 {
-                        let baseName = file.deletingPathExtension().lastPathComponent
-                        let outputName = "\(baseName)\(format.suffix).\(format.ext)"
-                        let outputURL = URL(fileURLWithPath: outputDir).appendingPathComponent(outputName)
-                        outputFiles.append(outputURL)
+            // Build the compatible job list up front by probing each input's actual
+            // streams. Skip impossible combos (e.g. image → WAV, audio → MP4) instead
+            // of firing ffmpeg blindly and failing with a cryptic error.
+            var jobs: [(file: URL, format: ConvertFormat)] = []
+            var skipped = 0
+            for file in files {
+                let caps = mediaCapabilities(file)
+                for format in formats {
+                    if format.isCompatible(hasVideo: caps.hasVideo, hasAudio: caps.hasAudio) {
+                        jobs.append((file, format))
+                    } else {
+                        skipped += 1
                     }
                 }
             }
 
-            if shouldAddToProject {
+            let total = jobs.count
+            var outputFiles: [URL] = []
+            var failed = 0
+
+            if total == 0 {
+                await MainActor.run {
+                    isConverting = false
+                    progress = 1.0
+                    statusMessage = "Nothing to convert — formats don't match these files"
+                    dropCoordinator.dropAction = .none
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                        if !isConverting { statusMessage = "" }
+                    }
+                }
+                return
+            }
+
+            for (index, job) in jobs.enumerated() {
+                await MainActor.run {
+                    currentItem = index + 1
+                    progress = Double(index) / Double(total)
+                    statusMessage = "\(job.file.lastPathComponent) → \(job.format.label)"
+                }
+
+                let outputDir = job.file.deletingLastPathComponent().path
+                let result = await convertFile(job.file, to: job.format, proresProfile: profile, rescale: scale, outputDir: outputDir)
+
+                if result.status == 0 {
+                    outputFiles.append(convertedOutputURL(for: job.file, format: job.format, outputDir: outputDir))
+                } else {
+                    failed += 1
+                }
+            }
+
+            if shouldAddToProject && !outputFiles.isEmpty {
                 await MainActor.run {
                     statusMessage = "Adding to project..."
                 }
                 ProjectManager.shared.addFilesToProject(outputFiles)
             }
 
+            // Honest summary: report failures and skips instead of always "Complete!".
+            let done = outputFiles.count
+            let summary: String
+            if failed == 0 && skipped == 0 {
+                summary = shouldAddToProject ? "Added to project!" : "Complete!"
+            } else {
+                var parts = ["\(done) done"]
+                if failed > 0 { parts.append("\(failed) failed") }
+                if skipped > 0 { parts.append("\(skipped) skipped") }
+                summary = parts.joined(separator: " · ")
+            }
+
             await MainActor.run {
                 isConverting = false
                 progress = 1.0
-                statusMessage = shouldAddToProject ? "Added to project!" : "Complete!"
+                statusMessage = summary
                 dropCoordinator.dropAction = .none
 
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                let clearDelay: TimeInterval = (failed == 0 && skipped == 0) ? 1.5 : 3.5
+                DispatchQueue.main.asyncAfter(deadline: .now() + clearDelay) {
                     if !isConverting {
                         droppedFiles.removeAll()
                         statusMessage = ""
@@ -522,6 +569,17 @@ enum ConvertFormat: Hashable, CaseIterable {
         }
     }
 
+    /// Can this output format be produced from an input with the given streams?
+    /// Audio formats need an audio stream; visual formats need a video/image stream.
+    func isCompatible(hasVideo: Bool, hasAudio: Bool) -> Bool {
+        switch self {
+        case .wav24, .mp3:
+            return hasAudio
+        case .mp4H264, .mp4H265, .webm, .prores, .webp, .png, .jpg:
+            return hasVideo
+        }
+    }
+
     var tooltip: String {
         switch self {
         case .wav24: return "48kHz 24-bit PCM"
@@ -539,14 +597,27 @@ enum ConvertFormat: Hashable, CaseIterable {
 
 // MARK: - Conversion Function
 
+/// Resolve the output URL for a conversion, guaranteeing it never equals the
+/// input path. Formats with an empty suffix (mp3, webp, png, jpg) would otherwise
+/// produce output == input when the source already has that extension, and ffmpeg's
+/// `-y` would read and overwrite the same file → data loss. Single source of truth
+/// so the converter and the "add to project" list always agree on the filename.
+func convertedOutputURL(for input: URL, format: ConvertFormat, outputDir: String) -> URL {
+    let baseName = input.deletingPathExtension().lastPathComponent
+    var url = URL(fileURLWithPath: outputDir).appendingPathComponent("\(baseName)\(format.suffix).\(format.ext)")
+    if url.path == input.path {
+        url = URL(fileURLWithPath: outputDir).appendingPathComponent("\(baseName)\(format.suffix)_converted.\(format.ext)")
+    }
+    return url
+}
+
 func convertFile(_ input: URL, to format: ConvertFormat, proresProfile: ProResProfile, rescale: RescaleOption, outputDir: String) async -> (status: Int32, output: String) {
     guard let ffmpeg = which("ffmpeg") else {
         return (1, "ffmpeg not found")
     }
 
-    let baseName = input.deletingPathExtension().lastPathComponent
-    let outputName = "\(baseName)\(format.suffix).\(format.ext)"
-    let outputPath = URL(fileURLWithPath: outputDir).appendingPathComponent(outputName).path
+    let outputPath = convertedOutputURL(for: input, format: format, outputDir: outputDir).path
+    let inputIsVideo = categorizeFile(input) == .video
 
     var args: [String] = [ffmpeg, "-i", input.path, "-y"]
 
@@ -590,18 +661,21 @@ func convertFile(_ input: URL, to format: ConvertFormat, proresProfile: ProResPr
         if !filters.isEmpty {
             args += ["-vf", filters.joined(separator: ",")]
         }
+        if inputIsVideo { args += ["-frames:v", "1"] }
         args += ["-c:v", "libwebp", "-lossless", "0", "-quality", "90", "-pix_fmt", "yuva420p"]
 
     case .png:
         if !filters.isEmpty {
             args += ["-vf", filters.joined(separator: ",")]
         }
+        if inputIsVideo { args += ["-frames:v", "1"] }
         args += ["-c:v", "png"]
 
     case .jpg:
         if !filters.isEmpty {
             args += ["-vf", filters.joined(separator: ",")]
         }
+        if inputIsVideo { args += ["-frames:v", "1"] }
         args += ["-q:v", "2"]
     }
 
