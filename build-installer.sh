@@ -26,6 +26,27 @@ APP_SIGN_IDENTITY="Developer ID Application: Wilke Neels Bakker (X762P3DH33)"
 PKG_SIGN_IDENTITY="Developer ID Installer: Wilke Neels Bakker (X762P3DH33)"
 TEAM_ID="X762P3DH33"
 
+# notarytool keychain profile. Create it once with:
+#   xcrun notarytool store-credentials thedownloader \
+#     --key ~/Downloads/AuthKey_UR2AFCQ3N2.p8 --key-id UR2AFCQ3N2 --issuer <ISSUER_ID>
+# (Issuer ID is the UUID from App Store Connect → Users and Access → Integrations → Keys)
+NOTARY_PROFILE="thedownloader"
+
+# Preflight: fail early with a clear message if signing/notary prerequisites are missing.
+if ! security find-identity -v -p codesigning | grep -q "Developer ID Application"; then
+    echo "✗ No 'Developer ID Application' identity in the keychain."
+    echo "  Restore the .p12 (cert + private key) or create new Developer ID certs at developer.apple.com."
+    exit 1
+fi
+if ! security find-identity -v | grep -q "Developer ID Installer"; then
+    echo "✗ No 'Developer ID Installer' identity in the keychain."
+    exit 1
+fi
+if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
+    echo "✗ notarytool profile '$NOTARY_PROFILE' not set up (see store-credentials note above)."
+    exit 1
+fi
+
 echo ""
 echo -e "${BLUE}╔════════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║    THE DOWNLOADER - Build Installer        ║${NC}"
@@ -214,6 +235,16 @@ productbuild --distribution "$INSTALLER_DIR/distribution.xml" \
 echo -e "  ${GREEN}✓${NC} Installer package created and signed"
 
 #
+# 6b. Notarize the installer package and staple the ticket
+#
+echo -e "${YELLOW}[6b/7]${NC} Notarizing (uploads to Apple, can take a few minutes)..."
+xcrun notarytool submit "$BUILD_DIR/TheDownloader-Installer.pkg" \
+    --keychain-profile "$NOTARY_PROFILE" \
+    --wait
+xcrun stapler staple "$BUILD_DIR/TheDownloader-Installer.pkg"
+echo -e "  ${GREEN}✓${NC} Notarized and stapled"
+
+#
 # 7. Create DMG with installer
 #
 echo -e "${YELLOW}[7/7]${NC} Creating DMG..."
@@ -241,6 +272,9 @@ hdiutil create -volname "THE DOWNLOADER" \
     -srcfolder "$BUILD_DIR/dmg_contents" \
     -ov -format UDZO \
     "$BUILD_DIR/TheDownloader.dmg" 2>/dev/null
+
+# Staple the DMG too (the pkg inside is already stapled). Non-fatal if it can't.
+xcrun stapler staple "$BUILD_DIR/TheDownloader.dmg" 2>/dev/null || true
 
 echo -e "  ${GREEN}✓${NC} DMG created"
 

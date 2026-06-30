@@ -157,7 +157,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // Create popover
         popover = NSPopover()
-        popover.contentSize = NSSize(width: 380, height: 540)
+        popover.contentSize = NSSize(width: 380, height: 600)
         // .applicationDefined: the popover does NOT auto-close when you click
         // outside or switch apps (the old .transient behavior was the annoyance).
         // It closes only via the menu-bar icon, Escape, or the inactivity timer below.
@@ -430,7 +430,7 @@ struct MainView: View {
                 DropChoiceView(selectedTab: $selectedTab)
             }
         }
-        .frame(width: 380, height: 540)
+        .frame(width: 380, height: 600)
         .onExitCommand {
             NotificationCenter.default.post(name: .closePopover, object: nil)
         }

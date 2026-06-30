@@ -73,7 +73,8 @@ struct SetupView: View {
     private let currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
 
     var body: some View {
-        VStack(spacing: 12) {
+        ScrollView {
+            VStack(spacing: 12) {
             // Updates Card
             VStack(spacing: 10) {
                 HStack(spacing: 12) {
@@ -161,20 +162,15 @@ struct SetupView: View {
             )
 
             // Instagram Card — needs cookies from a logged-in browser
-            VStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 12) {
                     Image(systemName: "camera.circle.fill")
                         .font(.system(size: 20))
                         .foregroundColor(.accentColor)
                         .frame(width: 32)
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Instagram Login")
-                            .font(.system(size: 12, weight: .medium))
-                        Text("Reels & Stories need a logged-in browser")
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
-                    }
+                    Text("Instagram Login")
+                        .font(.system(size: 12, weight: .medium))
 
                     Spacer()
 
@@ -185,8 +181,14 @@ struct SetupView: View {
                     }
                     .labelsHidden()
                     .controlSize(.small)
-                    .frame(width: 100)
+                    .frame(width: 96)
                 }
+
+                // Full-width subtitle so it never gets squeezed by the picker.
+                Text("Reels & Stories need cookies from a browser where you're logged in. TikTok & YouTube need no login.")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 // Safari cookies live in a protected folder → the app needs Full
                 // Disk Access. This button registers the app in that list and opens
@@ -198,10 +200,8 @@ struct SetupView: View {
                         HStack(spacing: 6) {
                             Image(systemName: "lock.open.fill")
                                 .font(.system(size: 10))
-                            Text("Enable Full Disk Access (then toggle TheDownloader on)")
+                            Text("Enable Full Disk Access, then toggle on")
                                 .font(.system(size: 10, weight: .medium))
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 5)
@@ -264,8 +264,6 @@ struct SetupView: View {
                     .stroke(Color.primary.opacity(0.06), lineWidth: 1)
             )
 
-            Spacer()
-
             // Legal notice box
             VStack(spacing: 8) {
                 HStack(spacing: 6) {
@@ -289,8 +287,9 @@ struct SetupView: View {
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(Color.orange.opacity(0.2), lineWidth: 1)
             )
+            }
+            .padding(16)
         }
-        .padding(16)
         .onAppear {
             checkInstallStatus()
         }
