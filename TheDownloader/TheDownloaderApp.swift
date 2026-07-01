@@ -192,6 +192,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 touchFullDiskAccessProtectedPaths()
             }
         }
+
+        // Move yt-dlp out of the code seal on first run (seed from the bundle), then
+        // refresh it from GitHub in the background (throttled). Keeps yt-dlp current
+        // without an app rebuild — see Utilities "Updatable yt-dlp".
+        DispatchQueue.global(qos: .utility).async {
+            seedUpdatableYtDlpIfNeeded()
+            Task { await refreshYtDlp() }
+        }
     }
 
     func setupDragDropView() {

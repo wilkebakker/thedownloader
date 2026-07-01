@@ -48,6 +48,15 @@ func homebrewPrefix() -> String? {
 
 /// Find executable path for a given tool name
 func which(_ name: String) -> String? {
+    // 0. Prefer the updatable copy (outside the app's code seal) for yt-dlp, so it
+    //    can be refreshed at runtime without rebuilding/re-signing the app.
+    if name == "yt-dlp" {
+        let updatable = updatableYtDlpPath()
+        if FileManager.default.isExecutableFile(atPath: updatable) {
+            return updatable
+        }
+    }
+
     // 1. Check bundled binaries first (inside app bundle)
     if let binPath = bundledBinPath() {
         let bundledPath = (binPath as NSString).appendingPathComponent(name)
@@ -80,6 +89,83 @@ func which(_ name: String) -> String? {
     }
 
     return nil
+}
+
+// MARK: - Updatable yt-dlp (kept OUTSIDE the app's code signature)
+
+// yt-dlp breaks often (YouTube changes) and needs frequent updates. Bundling it
+// inside Contents/Resources/bin put it under the app's code seal, so every update
+// meant a full rebuild + re-notarize, and a stale bundled copy silently broke
+// downloads. Fix: keep yt-dlp in Application Support (outside the seal), refresh it
+// from GitHub at runtime, and re-sign it ad-hoc after each update. Updating it then
+// never touches the app's signature.
+
+/// Directory for runtime-updatable tools, outside the app bundle.
+func updatableBinDir() -> URL {
+    let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        .appendingPathComponent("TheDownloader/bin", isDirectory: true)
+    try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+    return base
+}
+
+func updatableYtDlpPath() -> String {
+    updatableBinDir().appendingPathComponent("yt-dlp").path
+}
+
+/// Ad-hoc sign a freshly written binary. Plain ad-hoc (NO hardened runtime) means
+/// library validation is off, so yt-dlp can dlopen its extracted Python.framework
+/// without a disable-library-validation entitlement. In-app downloads aren't
+/// quarantined, so no Developer ID / notarization is needed for this local copy.
+@discardableResult
+func adhocSign(_ path: String) -> Bool {
+    _ = try? runProcessSync(cmd: "/usr/bin/xattr", args: ["-cr", path])
+    let out = (try? runProcessSync(cmd: "/usr/bin/codesign", args: ["--force", "--sign", "-", path])) ?? ""
+    return !out.lowercased().contains("error")
+}
+
+/// On first run, seed the updatable yt-dlp from the bundled copy so the app works
+/// offline immediately; from then on the writable copy is preferred (see `which`).
+func seedUpdatableYtDlpIfNeeded() {
+    let dest = updatableYtDlpPath()
+    if FileManager.default.isExecutableFile(atPath: dest) { return }
+    guard let binPath = bundledBinPath() else { return }
+    let bundled = (binPath as NSString).appendingPathComponent("yt-dlp")
+    guard FileManager.default.fileExists(atPath: bundled) else { return }
+    try? FileManager.default.removeItem(atPath: dest)
+    do {
+        try FileManager.default.copyItem(atPath: bundled, toPath: dest)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dest)
+        adhocSign(dest)
+    } catch { }
+}
+
+/// Download the latest yt-dlp (universal2) into the updatable dir and ad-hoc sign
+/// it. Throttled to once per 24 h unless `force` is set. Safe to call at launch.
+@discardableResult
+func refreshYtDlp(force: Bool = false) async -> Bool {
+    let key = "ytDlpLastRefresh"
+    if !force,
+       let last = UserDefaults.standard.object(forKey: key) as? Date,
+       Date().timeIntervalSince(last) < 24 * 3600 {
+        return false
+    }
+    let url = URL(string: "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos")!
+    do {
+        let (tmp, resp) = try await URLSession.shared.download(from: url)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { return false }
+        let stage = updatableBinDir().appendingPathComponent("yt-dlp.new").path
+        try? FileManager.default.removeItem(atPath: stage)
+        try FileManager.default.moveItem(atPath: tmp.path, toPath: stage)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stage)
+        guard adhocSign(stage) else { return false }
+        let dest = updatableYtDlpPath()
+        try? FileManager.default.removeItem(atPath: dest)
+        try FileManager.default.moveItem(atPath: stage, toPath: dest)
+        UserDefaults.standard.set(Date(), forKey: key)
+        return true
+    } catch {
+        return false
+    }
 }
 
 // MARK: - Process Execution
