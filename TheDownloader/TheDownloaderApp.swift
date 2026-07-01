@@ -198,7 +198,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // without an app rebuild — see Utilities "Updatable yt-dlp".
         DispatchQueue.global(qos: .utility).async {
             seedUpdatableYtDlpIfNeeded()
-            Task { await refreshYtDlp() }
+            Task { await refreshYtDlpIfOutdated(throttled: true) }
         }
     }
 

@@ -139,16 +139,30 @@ func seedUpdatableYtDlpIfNeeded() {
     } catch { }
 }
 
-/// Download the latest yt-dlp (universal2) into the updatable dir and ad-hoc sign
-/// it. Throttled to once per 24 h unless `force` is set. Safe to call at launch.
+/// Installed yt-dlp version string (e.g. "2026.06.30"), or nil.
+func installedYtDlpVersion() -> String? {
+    guard let ytdlp = which("yt-dlp") else { return nil }
+    let v = (try? runProcessSync(cmd: ytdlp, args: ["--version"]))?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    return (v?.isEmpty == false) ? v : nil
+}
+
+/// Latest yt-dlp release tag on GitHub, or nil if it can't be determined.
+func latestYtDlpTag() async -> String? {
+    let api = URL(string: "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest")!
+    var req = URLRequest(url: api)
+    req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+    guard let (data, resp) = try? await URLSession.shared.data(for: req),
+          (resp as? HTTPURLResponse)?.statusCode == 200,
+          let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let tag = obj["tag_name"] as? String else { return nil }
+    return tag.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+/// Download the latest yt-dlp (universal2 `yt-dlp_macos`) into the updatable dir
+/// and ad-hoc sign it. Plain HTTPS from GitHub — no Homebrew involved.
 @discardableResult
-func refreshYtDlp(force: Bool = false) async -> Bool {
-    let key = "ytDlpLastRefresh"
-    if !force,
-       let last = UserDefaults.standard.object(forKey: key) as? Date,
-       Date().timeIntervalSince(last) < 24 * 3600 {
-        return false
-    }
+func downloadLatestYtDlp() async -> Bool {
     let url = URL(string: "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos")!
     do {
         let (tmp, resp) = try await URLSession.shared.download(from: url)
@@ -161,11 +175,38 @@ func refreshYtDlp(force: Bool = false) async -> Bool {
         let dest = updatableYtDlpPath()
         try? FileManager.default.removeItem(atPath: dest)
         try FileManager.default.moveItem(atPath: stage, toPath: dest)
-        UserDefaults.standard.set(Date(), forKey: key)
         return true
     } catch {
         return false
     }
+}
+
+/// Update yt-dlp only if GitHub actually has a newer version than what's
+/// installed — so a failed download from some *other* cause (bad URL, cookies)
+/// doesn't re-download yt-dlp every time. `throttled` skips the version check if
+/// we refreshed within 24 h (used at launch); pass false for the on-failure
+/// retry so it checks immediately. Returns true only if a newer build was
+/// actually installed.
+@discardableResult
+func refreshYtDlpIfOutdated(throttled: Bool) async -> Bool {
+    let key = "ytDlpLastRefresh"
+    if throttled,
+       let last = UserDefaults.standard.object(forKey: key) as? Date,
+       Date().timeIntervalSince(last) < 24 * 3600 {
+        return false
+    }
+    let installed = installedYtDlpVersion()
+    let latest = await latestYtDlpTag()
+    if let latest, let installed, latest == installed {
+        UserDefaults.standard.set(Date(), forKey: key)   // confirmed current
+        return false
+    }
+    if latest == nil && installed != nil {
+        return false   // can't confirm latest → don't thrash, keep what we have
+    }
+    let ok = await downloadLatestYtDlp()
+    if ok { UserDefaults.standard.set(Date(), forKey: key) }
+    return ok
 }
 
 // MARK: - Process Execution

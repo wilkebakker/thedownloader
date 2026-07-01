@@ -642,7 +642,7 @@ func runYtDlpWithProgress(
 
     var progress = DownloadProgress()
 
-    return await runProcessWithCallback(args: args, controller: controller) { output in
+    let handleOutput: (String) -> Void = { output in
         // Parse playlist progress - multiple formats:
         // "[youtube:tab] Downloading item 1 of 119"
         // "[download] Downloading item 1 of 119"
@@ -678,4 +678,17 @@ func runYtDlpWithProgress(
             }
         }
     }
+
+    var status = await runProcessWithCallback(args: args, controller: controller, onOutput: handleOutput)
+
+    // If yt-dlp failed it may be outdated — YouTube changes break it every few
+    // days. Pull the latest ONLY if GitHub actually has a newer build, then retry
+    // once with the refreshed binary. A failure from another cause (bad URL,
+    // missing cookies) won't re-download, because the version check short-circuits
+    // when we're already current. All via plain GitHub download — no Homebrew.
+    if status != 0, await refreshYtDlpIfOutdated(throttled: false) {
+        args[0] = which("yt-dlp") ?? args[0]
+        status = await runProcessWithCallback(args: args, controller: controller, onOutput: handleOutput)
+    }
+    return status
 }
