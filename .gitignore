@@ -38,3 +38,11 @@ Carthage/Build/
 *.perspectivev3
 !default.perspectivev3
 CLAUDE.md
+
+# Signing secrets — NEVER commit (backup lives on NAS: _SIGNING_KEYS_BACKUP)
+*.p12
+*.p8
+*.cer
+*.mobileprovision
+*_private_key.txt
+.p12password
